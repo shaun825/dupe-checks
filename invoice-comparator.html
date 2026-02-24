@@ -773,31 +773,176 @@ function renderFileList() {
 }
 
 // ─── PARSING ───
+
+// Porsche invoice part number pattern: digits/spaces forming codes like
+// "964 207 314 00", "900 174 063 40", "PCG 352 097 12", "N 011 666 7"
+const PART_CODE_RE = /^(?:PCG|PAF|WHT|N\s)?\s*\d[\d\s]{5,17}\d$/;
+
+function looksLikePartCode(str) {
+  const s = str.trim();
+  // Must be mostly digits (with spaces/letters as separators)
+  // e.g. "964 207 314 00" or "900 174 063 40" or "PCG 352 097 12"
+  return /^(?:[A-Z]{1,3}\s?)?\d[\d\s]{4,16}\d$/.test(s) && s.replace(/\s/g,'').length >= 6;
+}
+
+function cleanPartCode(str) {
+  return str.trim().replace(/\s+/g, ' ');
+}
+
 async function parsePDF(file) {
   const buffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
-  let text = '';
-  for (let i = 1; i <= pdf.numPages; i++) {
-    const page = await pdf.getPage(i);
+  const allRows = []; // { desc, code, qty, price, raw }
+
+  for (let p = 1; p <= pdf.numPages; p++) {
+    const page = await pdf.getPage(p);
     const content = await page.getTextContent();
-    // Get items with positions
-    const items = content.items.map(item => ({
-      str: item.str,
-      x: Math.round(item.transform[4]),
-      y: Math.round(item.transform[5]),
-      w: Math.round(item.width)
-    }));
-    // Group by Y position (lines)
-    const lineMap = {};
-    for (const item of items) {
-      if (!lineMap[item.y]) lineMap[item.y] = [];
-      lineMap[item.y].push(item);
+
+    // Collect all text items with x,y positions
+    const tokens = content.items
+      .filter(t => t.str.trim().length > 0)
+      .map(t => ({
+        str: t.str.trim(),
+        x: Math.round(t.transform[4]),
+        y: Math.round(t.transform[5]),
+        w: Math.round(t.width || 0)
+      }));
+
+    if (tokens.length === 0) continue;
+
+    // ── Determine page width and column boundaries ──
+    const xs = tokens.map(t => t.x);
+    const pageWidth = Math.max(...tokens.map(t => t.x + t.w), ...xs);
+
+    // Group tokens by Y (row), tolerance ±3px
+    const rowMap = {};
+    for (const tok of tokens) {
+      const key = Math.round(tok.y / 3) * 3;
+      if (!rowMap[key]) rowMap[key] = [];
+      rowMap[key].push(tok);
     }
-    const lines = Object.keys(lineMap).sort((a,b) => b - a)
-      .map(y => lineMap[y].sort((a,b) => a.x - b.x).map(i => i.str).join(' '));
-    text += lines.join('\n') + '\n';
+
+    // Sort rows top-to-bottom (PDF Y is bottom-up, so descending)
+    const rows = Object.entries(rowMap)
+      .sort((a, b) => b[0] - a[0])
+      .map(([y, toks]) => ({ y: +y, toks: toks.sort((a, b) => a.x - b.x) }));
+
+    // ── Detect column layout from rows that have a part code ──
+    // A "parts row" has: [description tokens] [part code] [qty] [R] [amount]
+    // Part code is the rightmost token that matches the part code pattern
+    // before the currency/amount tokens on the right.
+
+    // Find the x-ranges for: desc (left), code (middle), amount (right)
+    // by sampling rows that contain a part code
+    let descMaxX = 0, codeMinX = 9999, codeMaxX = 0, amountMinX = 9999;
+    let calibrated = false;
+
+    for (const row of rows) {
+      const codeTokenIdx = row.toks.findIndex(t => looksLikePartCode(t.str));
+      if (codeTokenIdx < 0) continue;
+      const codeTok = row.toks[codeTokenIdx];
+      // Amount token: last token that looks like a number (after the code)
+      const afterCode = row.toks.slice(codeTokenIdx + 1);
+      const amtTok = [...afterCode].reverse().find(t => /^[\d\s,\.]+$/.test(t.str.replace(/^R\s*/,'')));
+      if (!amtTok) continue;
+
+      // Description: all tokens before the code token
+      const descToks = row.toks.slice(0, codeTokenIdx);
+      if (descToks.length === 0) continue;
+
+      const descRight = Math.max(...descToks.map(t => t.x + t.w));
+      descMaxX = Math.max(descMaxX, descRight);
+      codeMinX = Math.min(codeMinX, codeTok.x);
+      codeMaxX = Math.max(codeMaxX, codeTok.x + codeTok.w);
+      amountMinX = Math.min(amountMinX, amtTok.x);
+      calibrated = true;
+    }
+
+    if (!calibrated) {
+      // Fallback: treat as flat text and use legacy parser
+      const lines = rows.map(r => r.toks.map(t => t.str).join(' '));
+      const fallback = parseTextToLineItems(lines.join('\n'), file.name);
+      allRows.push(...fallback.items.map(i => ({ ...i, _page: p })));
+      continue;
+    }
+
+    // ── Now extract line items using column positions ──
+    const SKIP = /^(BANKING|ACCOUNT|Branch|VAT|Tel|Email|Fax|DATE|NAME|ADDRESS|MAKE|MODEL|REG|ODOM|VIN|REFERENCE|ESTIMATE|INVOICE|TAX|PAYABLE|WORKSHOP|Parts|QTY|PRODUCT|Sub.?total|Incl|Deposit|Due|Fuel Charge|Motor Oil|Gearbox|Diff|Steering|Brake Fluid|Radiator|Engine Clean|Consumables|Petrol|Car Wash|Workshop Repairs|RS Service|First National|BRANCH)/i;
+
+    for (const row of rows) {
+      const lineStr = row.toks.map(t => t.str).join(' ');
+      if (SKIP.test(lineStr)) continue;
+
+      // Find part code token in this row
+      const codeTokenIdx = row.toks.findIndex(t => looksLikePartCode(t.str));
+      if (codeTokenIdx < 0) continue;
+
+      const codeTok = row.toks[codeTokenIdx];
+      const code = cleanPartCode(codeTok.str);
+
+      // Description = all tokens to the left of the code token
+      const descToks = row.toks.slice(0, codeTokenIdx).filter(t => !/^R$/.test(t.str));
+      const desc = descToks.map(t => t.str).join(' ').trim();
+      if (desc.length < 2) continue;
+
+      // Qty: token immediately after code that is a small integer (1–99)
+      let qty = 1;
+      const afterCode = row.toks.slice(codeTokenIdx + 1);
+      const qtyTok = afterCode.find(t => /^\d{1,2}$/.test(t.str.trim()) && parseInt(t.str) <= 99);
+      if (qtyTok) qty = parseInt(qtyTok.str);
+
+      // Amount: last numeric-looking token in the row (may contain spaces/commas)
+      // RS Autosport format: "46,85" or "5 277,62" — comma is decimal separator
+      const amtToks = afterCode.filter(t => /^[\d][\d\s,\.]*$/.test(t.str));
+      let price = 0;
+      if (amtToks.length > 0) {
+        // Take the last one (rightmost = the line total)
+        let amtStr = amtToks[amtToks.length - 1].str.trim();
+        // Handle SA format: spaces as thousands sep, comma as decimal
+        // e.g. "5 277,62" → 5277.62 | "46,85" → 46.85
+        amtStr = amtStr.replace(/\s/g,'');
+        if (amtStr.includes(',') && !amtStr.includes('.')) {
+          amtStr = amtStr.replace(',', '.');
+        } else {
+          amtStr = amtStr.replace(',', '');
+        }
+        price = parseFloat(amtStr) || 0;
+      }
+
+      if (price <= 0) continue;
+
+      allRows.push({ description: desc, code, qty, price, raw: lineStr });
+    }
   }
-  return parseTextToLineItems(text, file.name);
+
+  // Detect currency & total
+  const buffer2 = await file.arrayBuffer();
+  const pdf2 = await pdfjsLib.getDocument({ data: buffer2 }).promise;
+  let fullText = '';
+  for (let p = 1; p <= pdf2.numPages; p++) {
+    const page = await pdf2.getPage(p);
+    const content = await page.getTextContent();
+    fullText += content.items.map(t => t.str).join(' ') + ' ';
+  }
+
+  let currency = 'ZAR';
+  if (/€/.test(fullText)) currency = 'EUR';
+  else if (/£/.test(fullText)) currency = 'GBP';
+
+  let total = 0;
+  const inclMatch = fullText.match(/Incl\s*VAT\s*R?\s*([\d\s,]+)/i);
+  const subMatch = fullText.match(/SUB-?TOTAL\s*R?\s*([\d\s,]+)/i);
+  const totalMatch = fullText.match(/Total[:\s]+[R€£]?\s*([\d\s,\.]+)/i);
+  const tm = inclMatch || subMatch || totalMatch;
+  if (tm) {
+    let ts = tm[1].replace(/\s/g,'');
+    if (ts.includes(',') && !ts.includes('.')) ts = ts.replace(',','.');
+    else ts = ts.replace(',','');
+    total = parseFloat(ts) || 0;
+  }
+  if (total === 0) total = allRows.reduce((s, i) => s + i.price, 0);
+
+  return { filename: file.name, items: allRows, total, currency };
 }
 
 function parseXLSX(file) {
@@ -976,6 +1121,12 @@ function similarity(a, b) {
   return union === 0 ? 0 : intersect / union;
 }
 
+function normaliseCode(code) {
+  // Strip all spaces, convert to uppercase for comparison
+  // "964 207 314 00" → "96420731400"
+  return String(code || '').replace(/\s+/g, '').toUpperCase();
+}
+
 function findDuplicates(invoices) {
   const allItems = [];
   invoices.forEach(inv => {
@@ -989,34 +1140,37 @@ function findDuplicates(invoices) {
 
   for (let i = 0; i < allItems.length; i++) {
     if (used.has(i)) continue;
-    const group = [allItems[i]];
     const a = allItems[i];
+    const group = [a];
+    const codeA = normaliseCode(a.code);
 
     for (let j = i + 1; j < allItems.length; j++) {
       if (used.has(j)) continue;
       const b = allItems[j];
-      
+      const codeB = normaliseCode(b.code);
+
       let isDup = false;
-      
-      // Exact part code match (if codes exist)
-      if (a.code && b.code && a.code.length > 5) {
-        const codeA = a.code.replace(/[\s-]/g,'').toUpperCase();
-        const codeB = b.code.replace(/[\s-]/g,'').toUpperCase();
-        if (codeA === codeB) isDup = true;
-      }
-      
-      // Price + description similarity
-      if (!isDup && Math.abs(a.price - b.price) < 0.1 && a.price > 0) {
-        if (similarity(a.description, b.description) > 0.4) isDup = true;
-      }
-      
-      // High description similarity alone
-      if (!isDup && similarity(a.description, b.description) > 0.75 && a.price > 0) {
+      let reason = '';
+
+      // ── PRIMARY: Exact part code match ──
+      // Both must have a code of at least 6 digits to qualify
+      if (codeA.length >= 6 && codeB.length >= 6 && codeA === codeB) {
         isDup = true;
+        reason = 'part-code';
+      }
+
+      // ── SECONDARY: Description similarity + price match ──
+      // Only used when no part codes are present (e.g. labour lines)
+      if (!isDup && (!a.code || a.code.length < 4) && (!b.code || b.code.length < 4)) {
+        const sim = similarity(a.description, b.description);
+        if (sim > 0.75 && Math.abs(a.price - b.price) < 1.0 && a.price > 0) {
+          isDup = true;
+          reason = 'description';
+        }
       }
 
       if (isDup) {
-        group.push(b);
+        group.push({ ...b, _dupReason: reason });
         used.add(j);
       }
     }
@@ -1144,15 +1298,17 @@ function renderDuplicates(content) {
           <div class="dup-row" style="color:var(--muted);font-size:10px;padding:8px 20px;border-bottom:1px solid var(--border)">
             <span>SOURCE INVOICE</span><span>DESCRIPTION</span><span style="text-align:right">QTY</span><span style="text-align:right">AMOUNT</span>
           </div>`;
-      group.forEach(item => {
-        const srcShort = item.source.replace(/^\d{8}-\w+-/, '').replace(/\.[^.]+$/, '');
+      const matchReason = group[1]?._dupReason === 'description' ? 'desc match' : 'part code';
+      group.forEach((item, gi) => {
+        const srcShort = item.source.replace(/^\d{8}-[^-]+-/, '').replace(/\.[^.]+$/, '');
         html += `<div class="dup-row">
           <div class="dup-source" title="${item.source}">${srcShort}</div>
-          <div class="dup-desc">${item.description} ${item.code ? `<span style="font-size:10px;color:var(--muted)">[${item.code}]</span>` : ''}</div>
+          <div class="dup-desc">${item.description}${item.code ? `<span style="font-size:10px;color:var(--muted);margin-left:6px">${item.code}</span>` : ''}</div>
           <div class="dup-qty">${item.qty}</div>
           <div class="dup-price">${formatAmount(item.price, 'ZAR')}</div>
         </div>`;
       });
+      html += `<div style="padding:6px 20px 8px;font-size:10px;color:var(--muted)">Matched by: <strong style="color:var(--warn)">${matchReason}</strong></div>`;
       html += `</div></div>`;
     });
   }
