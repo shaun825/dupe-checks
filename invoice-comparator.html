@@ -1,0 +1,1262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Invoice Comparator — Project Audit Tool</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@400;600;700;800&display=swap');
+
+  :root {
+    --bg: #0d0f14;
+    --surface: #13161d;
+    --surface2: #1a1e28;
+    --border: #252b38;
+    --accent: #e8c547;
+    --accent2: #4de3a0;
+    --danger: #f05a5a;
+    --warn: #f0924a;
+    --text: #e2e8f0;
+    --muted: #64748b;
+    --mono: 'DM Mono', monospace;
+    --sans: 'Syne', sans-serif;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--mono);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ─── HEADER ─── */
+  header {
+    border-bottom: 1px solid var(--border);
+    padding: 20px 32px;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    background: var(--surface);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+
+  .logo-mark {
+    width: 36px; height: 36px;
+    background: var(--accent);
+    border-radius: 4px;
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--sans);
+    font-weight: 800;
+    font-size: 14px;
+    color: #0d0f14;
+    flex-shrink: 0;
+  }
+
+  header h1 {
+    font-family: var(--sans);
+    font-weight: 700;
+    font-size: 16px;
+    letter-spacing: 0.05em;
+    color: var(--text);
+  }
+
+  header p {
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .header-right {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .project-pill {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 6px 14px;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    color: var(--accent);
+    font-family: var(--sans);
+    font-weight: 600;
+  }
+
+  /* ─── LAYOUT ─── */
+  .layout {
+    display: grid;
+    grid-template-columns: 300px 1fr;
+    min-height: calc(100vh - 65px);
+  }
+
+  /* ─── SIDEBAR ─── */
+  .sidebar {
+    border-right: 1px solid var(--border);
+    background: var(--surface);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .sidebar-section {
+    padding: 20px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .sidebar-label {
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 12px;
+    font-family: var(--sans);
+    font-weight: 600;
+  }
+
+  /* Project Selector */
+  .project-selector {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .project-input {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 13px;
+    outline: none;
+    width: 100%;
+    transition: border-color 0.2s;
+  }
+
+  .project-input:focus { border-color: var(--accent); }
+  .project-input::placeholder { color: var(--muted); }
+
+  /* Upload Zone */
+  .upload-zone {
+    border: 1.5px dashed var(--border);
+    border-radius: 8px;
+    padding: 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s;
+    background: var(--bg);
+    position: relative;
+  }
+
+  .upload-zone:hover, .upload-zone.drag-over {
+    border-color: var(--accent);
+    background: rgba(232,197,71,0.04);
+  }
+
+  .upload-zone input[type=file] {
+    position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;
+  }
+
+  .upload-icon {
+    font-size: 28px;
+    margin-bottom: 8px;
+    display: block;
+    opacity: 0.5;
+  }
+
+  .upload-zone p {
+    font-size: 11px;
+    color: var(--muted);
+    line-height: 1.6;
+  }
+
+  .upload-zone strong {
+    color: var(--accent);
+    font-weight: 500;
+  }
+
+  /* File List */
+  .file-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    overflow-y: auto;
+    flex: 1;
+    padding: 12px;
+  }
+
+  .file-card {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    cursor: pointer;
+    transition: all 0.15s;
+    position: relative;
+  }
+
+  .file-card:hover { border-color: var(--accent); }
+  .file-card.active { border-color: var(--accent); background: rgba(232,197,71,0.05); }
+
+  .file-card-name {
+    font-size: 11px;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-bottom: 4px;
+  }
+
+  .file-card-meta {
+    font-size: 10px;
+    color: var(--muted);
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .file-badge {
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 9px;
+    letter-spacing: 0.08em;
+    font-weight: 600;
+    font-family: var(--sans);
+    text-transform: uppercase;
+  }
+
+  .badge-pdf { background: rgba(240,90,90,0.15); color: #f05a5a; }
+  .badge-xlsx { background: rgba(77,227,160,0.15); color: var(--accent2); }
+  .badge-csv { background: rgba(240,146,74,0.15); color: var(--warn); }
+
+  .dup-badge {
+    position: absolute;
+    top: 8px; right: 8px;
+    background: var(--danger);
+    color: white;
+    border-radius: 10px;
+    font-size: 9px;
+    padding: 2px 6px;
+    font-family: var(--sans);
+    font-weight: 700;
+  }
+
+  .remove-btn {
+    position: absolute;
+    top: 6px; right: 28px;
+    background: none;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    padding: 2px;
+    display: none;
+  }
+
+  .file-card:hover .remove-btn { display: block; }
+
+  /* Run Button */
+  .run-btn {
+    margin: 16px;
+    background: var(--accent);
+    color: #0d0f14;
+    border: none;
+    border-radius: 6px;
+    padding: 12px;
+    font-family: var(--sans);
+    font-weight: 700;
+    font-size: 13px;
+    letter-spacing: 0.06em;
+    cursor: pointer;
+    width: calc(100% - 32px);
+    transition: opacity 0.15s, transform 0.1s;
+    text-transform: uppercase;
+  }
+
+  .run-btn:hover { opacity: 0.9; }
+  .run-btn:active { transform: scale(0.98); }
+  .run-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+  /* ─── MAIN CONTENT ─── */
+  .main {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* Tabs */
+  .tabs {
+    display: flex;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    padding: 0 24px;
+    gap: 0;
+    position: sticky;
+    top: 65px;
+    z-index: 50;
+  }
+
+  .tab {
+    padding: 14px 20px;
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.15s;
+    font-family: var(--sans);
+    font-weight: 600;
+    text-transform: uppercase;
+    position: relative;
+  }
+
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  .tab-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--danger);
+    color: white;
+    border-radius: 10px;
+    font-size: 9px;
+    padding: 2px 6px;
+    margin-left: 6px;
+    font-family: var(--sans);
+    font-weight: 700;
+  }
+
+  .tab-count.ok { background: var(--accent2); color: #0d0f14; }
+
+  /* Content Area */
+  .content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px;
+  }
+
+  /* ─── EMPTY STATE ─── */
+  .empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    min-height: 400px;
+    gap: 16px;
+    opacity: 0.5;
+    text-align: center;
+  }
+
+  .empty-icon { font-size: 48px; }
+
+  .empty-state h2 {
+    font-family: var(--sans);
+    font-size: 20px;
+    font-weight: 700;
+  }
+
+  .empty-state p { font-size: 12px; color: var(--muted); max-width: 300px; line-height: 1.7; }
+
+  /* ─── STATS STRIP ─── */
+  .stats-strip {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+
+  .stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 20px;
+  }
+
+  .stat-label {
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-family: var(--sans);
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+
+  .stat-value {
+    font-family: var(--sans);
+    font-size: 28px;
+    font-weight: 800;
+    color: var(--text);
+  }
+
+  .stat-value.danger { color: var(--danger); }
+  .stat-value.accent { color: var(--accent); }
+  .stat-value.ok { color: var(--accent2); }
+
+  /* ─── DUPLICATE GROUPS ─── */
+  .dup-group {
+    background: var(--surface);
+    border: 1px solid rgba(240,90,90,0.3);
+    border-radius: 10px;
+    margin-bottom: 16px;
+    overflow: hidden;
+  }
+
+  .dup-group-header {
+    background: rgba(240,90,90,0.08);
+    padding: 14px 20px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    border-bottom: 1px solid rgba(240,90,90,0.2);
+  }
+
+  .dup-group-header .pill {
+    background: var(--danger);
+    color: white;
+    border-radius: 20px;
+    padding: 3px 10px;
+    font-size: 10px;
+    font-family: var(--sans);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  .dup-group-title {
+    font-family: var(--sans);
+    font-size: 13px;
+    font-weight: 700;
+    flex: 1;
+    color: var(--text);
+  }
+
+  .dup-group-amount {
+    font-family: var(--sans);
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--danger);
+  }
+
+  .dup-rows {
+    padding: 4px 0;
+  }
+
+  .dup-row {
+    display: grid;
+    grid-template-columns: 180px 1fr auto auto;
+    gap: 12px;
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--border);
+    align-items: center;
+    font-size: 12px;
+  }
+
+  .dup-row:last-child { border-bottom: none; }
+
+  .dup-source {
+    font-size: 10px;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .dup-desc { color: var(--text); }
+  .dup-qty { color: var(--muted); text-align: right; }
+  .dup-price { color: var(--warn); text-align: right; font-weight: 500; }
+
+  /* ─── INVOICE TABLE ─── */
+  .invoice-section {
+    margin-bottom: 28px;
+  }
+
+  .invoice-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .invoice-title {
+    font-family: var(--sans);
+    font-size: 15px;
+    font-weight: 700;
+    flex: 1;
+  }
+
+  .invoice-total {
+    font-family: var(--sans);
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--accent);
+  }
+
+  .invoice-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+
+  .invoice-table th {
+    text-align: left;
+    padding: 8px 12px;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-family: var(--sans);
+    font-weight: 600;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .invoice-table td {
+    padding: 9px 12px;
+    border-bottom: 1px solid rgba(37,43,56,0.6);
+    vertical-align: middle;
+    color: var(--text);
+  }
+
+  .invoice-table tr:last-child td { border-bottom: none; }
+
+  .invoice-table tr.dup-highlight td {
+    background: rgba(240,90,90,0.06);
+    color: var(--danger);
+  }
+
+  .invoice-table tr.dup-highlight td:first-child {
+    border-left: 2px solid var(--danger);
+  }
+
+  .dup-flag {
+    background: rgba(240,90,90,0.15);
+    color: var(--danger);
+    border-radius: 3px;
+    padding: 2px 6px;
+    font-size: 9px;
+    font-family: var(--sans);
+    font-weight: 700;
+    margin-left: 6px;
+  }
+
+  .code-cell {
+    font-size: 10px;
+    color: var(--muted);
+    font-family: var(--mono);
+  }
+
+  /* ─── LOADING ─── */
+  .loading-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(13,15,20,0.85);
+    z-index: 1000;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 16px;
+    backdrop-filter: blur(4px);
+  }
+
+  .loading-overlay.show { display: flex; }
+
+  .spinner {
+    width: 40px; height: 40px;
+    border: 3px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .loading-overlay p {
+    font-family: var(--sans);
+    font-size: 14px;
+    color: var(--muted);
+  }
+
+  /* ─── SUMMARY COMPARE ─── */
+  .compare-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 14px;
+    margin-bottom: 24px;
+  }
+
+  .compare-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px;
+  }
+
+  .compare-card-name {
+    font-size: 11px;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-bottom: 8px;
+    font-family: var(--sans);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+  }
+
+  .compare-card-total {
+    font-family: var(--sans);
+    font-size: 22px;
+    font-weight: 800;
+    color: var(--accent);
+    margin-bottom: 12px;
+  }
+
+  .compare-card-rows {
+    font-size: 11px;
+    color: var(--muted);
+    display: flex;
+    gap: 12px;
+  }
+
+  .compare-card-rows span { color: var(--text); }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<div class="loading-overlay" id="loadingOverlay">
+  <div class="spinner"></div>
+  <p id="loadingText">Processing invoices…</p>
+</div>
+
+<header>
+  <div class="logo-mark">IC</div>
+  <div>
+    <h1>Invoice Comparator</h1>
+    <p>Duplicate Detection &amp; Cross-Invoice Audit</p>
+  </div>
+  <div class="header-right">
+    <div class="project-pill" id="headerProject">No Project Selected</div>
+  </div>
+</header>
+
+<div class="layout">
+
+  <!-- SIDEBAR -->
+  <aside class="sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-label">Project</div>
+      <div class="project-selector">
+        <input class="project-input" id="projectName" placeholder="e.g. Australia 2 — Roger Hall" value="Australia 2 — Roger Hall">
+      </div>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-label">Upload Invoices</div>
+      <div class="upload-zone" id="uploadZone">
+        <input type="file" id="fileInput" accept=".pdf,.xlsx,.xls,.csv" multiple>
+        <span class="upload-icon">📄</span>
+        <p><strong>Drop files here</strong> or click to browse<br>PDF, Excel (.xlsx), CSV supported</p>
+      </div>
+    </div>
+
+    <div class="sidebar-label" style="padding: 12px 12px 0;">Loaded Invoices (<span id="fileCount">0</span>)</div>
+    <div class="file-list" id="fileList"></div>
+
+    <button class="run-btn" id="runBtn" disabled onclick="runAnalysis()">⚡ Run Analysis</button>
+  </aside>
+
+  <!-- MAIN -->
+  <main class="main">
+    <div class="tabs">
+      <div class="tab active" onclick="showTab('duplicates')" id="tab-duplicates">
+        Duplicates <span class="tab-count" id="dupCount" style="display:none">0</span>
+      </div>
+      <div class="tab" onclick="showTab('all-items')" id="tab-all-items">All Line Items</div>
+      <div class="tab" onclick="showTab('summary')" id="tab-summary">Invoice Summary</div>
+    </div>
+
+    <div class="content" id="content">
+      <div class="empty-state">
+        <div class="empty-icon">🔍</div>
+        <h2>No Invoices Loaded</h2>
+        <p>Upload two or more invoices from the sidebar, then click Run Analysis to detect duplicates and compare line items across invoices.</p>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+// ─── STATE ───
+const state = {
+  files: [],
+  parsedInvoices: [],
+  duplicates: [],
+  currentTab: 'duplicates'
+};
+
+// ─── PDF.JS SETUP ───
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+// ─── FILE INPUT ───
+const fileInput = document.getElementById('fileInput');
+const uploadZone = document.getElementById('uploadZone');
+
+fileInput.addEventListener('change', e => addFiles(e.target.files));
+uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('drag-over'); });
+uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('drag-over'));
+uploadZone.addEventListener('drop', e => {
+  e.preventDefault();
+  uploadZone.classList.remove('drag-over');
+  addFiles(e.dataTransfer.files);
+});
+
+document.getElementById('projectName').addEventListener('input', e => {
+  document.getElementById('headerProject').textContent = e.target.value || 'No Project Selected';
+});
+
+function addFiles(fileList) {
+  for (const f of fileList) {
+    if (state.files.find(x => x.name === f.name)) continue;
+    state.files.push(f);
+  }
+  renderFileList();
+  document.getElementById('runBtn').disabled = state.files.length < 1;
+}
+
+function removeFile(name) {
+  state.files = state.files.filter(f => f.name !== name);
+  renderFileList();
+  document.getElementById('runBtn').disabled = state.files.length < 1;
+}
+
+function renderFileList() {
+  const list = document.getElementById('fileList');
+  document.getElementById('fileCount').textContent = state.files.length;
+  list.innerHTML = state.files.map(f => {
+    const ext = f.name.split('.').pop().toLowerCase();
+    const badge = ext === 'pdf' ? 'badge-pdf' : (ext === 'csv' ? 'badge-csv' : 'badge-xlsx');
+    const dupCount = state.parsedInvoices.length > 0 
+      ? (state.parsedInvoices.find(inv => inv.filename === f.name) || {}).dupItems || 0 
+      : 0;
+    return `<div class="file-card" id="fc-${encodeURIComponent(f.name)}">
+      <button class="remove-btn" onclick="removeFile('${f.name.replace(/'/g,"\\'")}')">✕</button>
+      ${dupCount > 0 ? `<div class="dup-badge">${dupCount} DUP</div>` : ''}
+      <div class="file-card-name">${f.name}</div>
+      <div class="file-card-meta">
+        <span class="file-badge ${badge}">${ext}</span>
+        <span>${(f.size/1024).toFixed(0)} KB</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ─── PARSING ───
+async function parsePDF(file) {
+  const buffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+  let text = '';
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    // Get items with positions
+    const items = content.items.map(item => ({
+      str: item.str,
+      x: Math.round(item.transform[4]),
+      y: Math.round(item.transform[5]),
+      w: Math.round(item.width)
+    }));
+    // Group by Y position (lines)
+    const lineMap = {};
+    for (const item of items) {
+      if (!lineMap[item.y]) lineMap[item.y] = [];
+      lineMap[item.y].push(item);
+    }
+    const lines = Object.keys(lineMap).sort((a,b) => b - a)
+      .map(y => lineMap[y].sort((a,b) => a.x - b.x).map(i => i.str).join(' '));
+    text += lines.join('\n') + '\n';
+  }
+  return parseTextToLineItems(text, file.name);
+}
+
+function parseXLSX(file) {
+  return new Promise(resolve => {
+    const reader = new FileReader();
+    reader.onload = e => {
+      const wb = XLSX.read(e.target.result, { type: 'array' });
+      const items = [];
+      for (const sheetName of wb.SheetNames) {
+        const sheet = wb.Sheets[sheetName];
+        const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+        // Find header row
+        let headerRow = -1;
+        const headerKeywords = ['description', 'item', 'part', 'qty', 'quantity', 'amount', 'price', 'total', 'code'];
+        for (let i = 0; i < Math.min(rows.length, 10); i++) {
+          const rowStr = rows[i].join(' ').toLowerCase();
+          if (headerKeywords.filter(k => rowStr.includes(k)).length >= 2) {
+            headerRow = i;
+            break;
+          }
+        }
+        if (headerRow === -1) headerRow = 0;
+        const headers = rows[headerRow].map(h => String(h).toLowerCase().trim());
+        for (let i = headerRow + 1; i < rows.length; i++) {
+          const row = rows[i];
+          const rowStr = row.join(' ').trim();
+          if (!rowStr) continue;
+          const obj = {};
+          headers.forEach((h, j) => obj[h] = row[j]);
+          const desc = obj['description'] || obj['item'] || obj['product name'] || obj['name'] || obj['part'] || row[1] || '';
+          const qty = parseFloat(obj['qty'] || obj['quantity'] || obj['qnty'] || 1);
+          const price = parseFloat(String(obj['price'] || obj['unit price'] || obj['amount'] || obj['total'] || obj['ext. price'] || obj['line total'] || 0).replace(/[^0-9.\-]/g, ''));
+          const code = String(obj['code'] || obj['item code'] || obj['part no'] || obj['productcode'] || obj['part number'] || '').trim();
+          if (desc && String(desc).length > 2) {
+            items.push({ description: String(desc).trim(), qty: isNaN(qty) ? 1 : qty, price: isNaN(price) ? 0 : price, code, raw: row.join(' ') });
+          }
+        }
+      }
+      resolve({ filename: file.name, items, total: items.reduce((s,i) => s + i.price, 0), currency: 'UNKNOWN' });
+    };
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+function parseCSV(file) {
+  return new Promise(resolve => {
+    const reader = new FileReader();
+    reader.onload = e => {
+      const lines = e.target.result.split('\n');
+      const items = [];
+      if (lines.length < 2) return resolve({ filename: file.name, items, total: 0 });
+      const headers = lines[0].split(',').map(h => h.toLowerCase().trim().replace(/"/g,''));
+      for (let i = 1; i < lines.length; i++) {
+        const cols = lines[i].split(',').map(c => c.replace(/"/g,'').trim());
+        if (!cols.join('').trim()) continue;
+        const obj = {};
+        headers.forEach((h, j) => obj[h] = cols[j] || '');
+        const desc = obj['description'] || obj['item'] || cols[1] || '';
+        const qty = parseFloat(obj['qty'] || obj['quantity'] || 1);
+        const price = parseFloat(String(obj['price'] || obj['amount'] || obj['total'] || 0).replace(/[^0-9.]/g,''));
+        const code = String(obj['code'] || obj['part'] || '').trim();
+        if (desc.length > 2) items.push({ description: desc, qty: isNaN(qty)?1:qty, price: isNaN(price)?0:price, code, raw: lines[i] });
+      }
+      resolve({ filename: file.name, items, total: items.reduce((s,i) => s + i.price, 0), currency: 'UNKNOWN' });
+    };
+    reader.readAsText(file);
+  });
+}
+
+function parseTextToLineItems(text, filename) {
+  const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 2);
+  const items = [];
+  
+  // Detect currency
+  const currencyMatch = text.match(/R\s[\d,]+|ZAR|EUR\s|£\s|USD|\$\s|€\s/);
+  let currency = 'ZAR';
+  if (currencyMatch) {
+    if (currencyMatch[0].includes('£')) currency = 'GBP';
+    else if (currencyMatch[0].includes('€') || text.includes('€')) currency = 'EUR';
+    else if (text.includes('USD') || text.includes('$')) currency = 'USD';
+  }
+
+  // RS Autosport style: part number pattern (digits and letters, 6-20 chars)
+  const partCodeRe = /\b([0-9A-Z]{3}[0-9\s]{3,15}[0-9A-Z]{2})\b/i;
+  // Price patterns: R 1,234.56 or R1234,56 or £123.45 or €123.45
+  const priceRe = /(?:R\s*|€\s*|£\s*)([0-9]{1,3}(?:[\s,][0-9]{3})*(?:[.,][0-9]{2})?)/;
+  const qtyRe = /^\s*(\d+)\s+/;
+
+  // Try to find structured line items
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    
+    // Skip header/footer lines
+    if (/^(BANKING|ACCOUNT|Branch|VAT Number|Tel|Email|Fax|DATE:|NAME:|ADDRESS:|MAKE:|MODEL:|REG|ODOM|VIN|REFERENCE|ESTIMATE|INVOICE|TAX|PAYABLE|WORKSHOP|Parts|QTY|PRODUCT|Sub-?total|Incl VAT|Deposit|Due|Fuel Charge|Motor Oil|Gearbox|Diff|Steering|Brake Fluid|Radiator|Engine Clean|Consumables|Petrol|Car Wash)/i.test(line)) continue;
+    if (/^R\s*[-–]\s*$/.test(line) || /^R\s*$/.test(line)) continue;
+    if (line.length < 5) continue;
+
+    const priceMatch = line.match(priceRe);
+    if (!priceMatch) continue;
+
+    const priceStr = priceMatch[1].replace(/[\s]/g, '').replace(',', '.');
+    const price = parseFloat(priceStr.replace(/[^0-9.]/g,''));
+    if (isNaN(price) || price <= 0) continue;
+
+    // Extract part code
+    const codeMatch = line.match(/([0-9]{3}[\s]?[0-9]{3}[\s]?[0-9]{3}[\s]?[0-9]{0,2}|[A-Z]{1,3}[0-9]{6,12}[A-Z0-9]{0,4}|N[\s][0-9]{3}[\s][0-9]{3}[\s][0-9]|PCG[\s][0-9]{3}[\s][0-9]{3}[\s][0-9]{2})/i);
+    const code = codeMatch ? codeMatch[1].replace(/\s/g,'') : '';
+
+    // Extract qty - look for pattern like "2 1 234,56" or qty on same line
+    let qty = 1;
+    const qtyMatch = line.match(/\b(\d+)\s+(?:R\s|€\s|£\s)/);
+    if (qtyMatch) qty = parseInt(qtyMatch[1]);
+
+    // Description: everything before the part code or price
+    let desc = line;
+    if (code) desc = desc.replace(codeMatch[0], '').trim();
+    desc = desc.replace(priceRe, '').trim();
+    desc = desc.replace(/^\d+\s*/, '').trim(); // remove leading qty
+    desc = desc.replace(/R\s*[-–]?\s*$/, '').replace(/^\s*[-–]\s*/, '').trim();
+    if (desc.length < 3) {
+      // Look at previous line for description
+      if (i > 0) desc = lines[i-1].replace(/^\d+\s+/, '').trim();
+    }
+
+    if (desc.length > 2 && price > 0) {
+      items.push({ description: desc, qty, price, code: code.replace(/\s/g,''), raw: line });
+    }
+  }
+
+  // Also try Parts-Wise style: structured table with Euro amounts
+  if (items.length < 3) {
+    // Try more permissive parsing for tabular data
+    for (const line of lines) {
+      const euroMatch = line.match(/€\s*([0-9]+[.,][0-9]{2})/);
+      if (!euroMatch) continue;
+      const price = parseFloat(euroMatch[1].replace(',', '.'));
+      if (isNaN(price) || price <= 0) continue;
+      const desc = line.split(/€/)[0].replace(/[0-9]+%\s*/g,'').replace(/[A-Z0-9]{6,}/,'').trim();
+      const codeM = line.match(/[0-9]{5,}/);
+      const code = codeM ? codeM[0] : '';
+      if (desc.length > 2) items.push({ description: desc, qty: 1, price, code, raw: line });
+    }
+  }
+
+  // Extract total from document
+  let total = 0;
+  const totalMatch = text.match(/(?:SUB-TOTAL|Sub-?Total|Incl\.?\s*VAT|TOTAL|Total in euro)\s*[R€£]?\s*([0-9]{1,3}(?:[\s,][0-9]{3})*(?:[.,][0-9]{2})?)/i);
+  if (totalMatch) {
+    total = parseFloat(totalMatch[1].replace(/[\s,]/g, '').replace(',','.').replace(/[^0-9.]/g,''));
+    // Try to detect if it's the ex-VAT or incl VAT total - prefer incl
+    const inclMatch = text.match(/Incl\s*VAT\s*[R€£]?\s*([0-9]{1,3}(?:[\s,][0-9]{3})*(?:[.,][0-9]{2})?)/i);
+    if (inclMatch) total = parseFloat(inclMatch[1].replace(/[\s,]/g,'').replace(',','.').replace(/[^0-9.]/g,''));
+  }
+
+  if (total === 0) total = items.reduce((s, i) => s + i.price, 0);
+
+  return { filename, items, total, currency };
+}
+
+// ─── DUPLICATE DETECTION ───
+function normalize(str) {
+  return String(str).toLowerCase().trim()
+    .replace(/[^a-z0-9\s]/g, '')
+    .replace(/\s+/g, ' ');
+}
+
+function similarity(a, b) {
+  a = normalize(a); b = normalize(b);
+  if (a === b) return 1;
+  if (!a || !b) return 0;
+  // Token overlap
+  const ta = new Set(a.split(' ').filter(t => t.length > 2));
+  const tb = new Set(b.split(' ').filter(t => t.length > 2));
+  const intersect = [...ta].filter(t => tb.has(t)).length;
+  const union = new Set([...ta, ...tb]).size;
+  return union === 0 ? 0 : intersect / union;
+}
+
+function findDuplicates(invoices) {
+  const allItems = [];
+  invoices.forEach(inv => {
+    inv.items.forEach((item, idx) => {
+      allItems.push({ ...item, source: inv.filename, invIdx: invoices.indexOf(inv), itemIdx: idx });
+    });
+  });
+
+  const groups = [];
+  const used = new Set();
+
+  for (let i = 0; i < allItems.length; i++) {
+    if (used.has(i)) continue;
+    const group = [allItems[i]];
+    const a = allItems[i];
+
+    for (let j = i + 1; j < allItems.length; j++) {
+      if (used.has(j)) continue;
+      const b = allItems[j];
+      
+      let isDup = false;
+      
+      // Exact part code match (if codes exist)
+      if (a.code && b.code && a.code.length > 5) {
+        const codeA = a.code.replace(/[\s-]/g,'').toUpperCase();
+        const codeB = b.code.replace(/[\s-]/g,'').toUpperCase();
+        if (codeA === codeB) isDup = true;
+      }
+      
+      // Price + description similarity
+      if (!isDup && Math.abs(a.price - b.price) < 0.1 && a.price > 0) {
+        if (similarity(a.description, b.description) > 0.4) isDup = true;
+      }
+      
+      // High description similarity alone
+      if (!isDup && similarity(a.description, b.description) > 0.75 && a.price > 0) {
+        isDup = true;
+      }
+
+      if (isDup) {
+        group.push(b);
+        used.add(j);
+      }
+    }
+
+    if (group.length > 1) {
+      used.add(i);
+      groups.push(group);
+    }
+  }
+
+  return groups;
+}
+
+// ─── RUN ANALYSIS ───
+async function runAnalysis() {
+  const overlay = document.getElementById('loadingOverlay');
+  const loadingText = document.getElementById('loadingText');
+  overlay.classList.add('show');
+
+  state.parsedInvoices = [];
+  state.duplicates = [];
+
+  for (const file of state.files) {
+    loadingText.textContent = `Parsing: ${file.name}…`;
+    const ext = file.name.split('.').pop().toLowerCase();
+    let inv;
+    try {
+      if (ext === 'pdf') inv = await parsePDF(file);
+      else if (ext === 'csv') inv = await parseCSV(file);
+      else inv = await parseXLSX(file);
+      state.parsedInvoices.push(inv);
+    } catch(e) {
+      console.error('Error parsing', file.name, e);
+    }
+  }
+
+  loadingText.textContent = 'Detecting duplicates…';
+  state.duplicates = findDuplicates(state.parsedInvoices);
+
+  // Mark dup items on invoices
+  state.parsedInvoices.forEach(inv => {
+    inv.dupItems = 0;
+    inv.items.forEach(item => item.isDup = false);
+  });
+
+  state.duplicates.forEach(group => {
+    group.forEach(item => {
+      const inv = state.parsedInvoices.find(i => i.filename === item.source);
+      if (inv) {
+        const orig = inv.items[item.itemIdx];
+        if (orig) { orig.isDup = true; inv.dupItems++; }
+      }
+    });
+  });
+
+  overlay.classList.remove('show');
+  renderFileList();
+  renderTab(state.currentTab);
+  updateCounts();
+}
+
+// ─── RENDER ───
+function showTab(tab) {
+  state.currentTab = tab;
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById(`tab-${tab}`).classList.add('active');
+  if (state.parsedInvoices.length > 0) renderTab(tab);
+}
+
+function updateCounts() {
+  const dc = document.getElementById('dupCount');
+  if (state.duplicates.length > 0) {
+    dc.textContent = state.duplicates.length;
+    dc.style.display = '';
+  } else {
+    dc.style.display = 'none';
+  }
+}
+
+function renderTab(tab) {
+  const content = document.getElementById('content');
+  if (state.parsedInvoices.length === 0) {
+    content.innerHTML = `<div class="empty-state"><div class="empty-icon">🔍</div><h2>No Invoices Loaded</h2><p>Upload invoices and click Run Analysis.</p></div>`;
+    return;
+  }
+
+  if (tab === 'duplicates') renderDuplicates(content);
+  else if (tab === 'all-items') renderAllItems(content);
+  else renderSummary(content);
+}
+
+function formatAmount(amount, currency) {
+  if (!amount) return '—';
+  const sym = { ZAR: 'R', EUR: '€', GBP: '£', USD: '$', UNKNOWN: '' }[currency] || '';
+  return sym + ' ' + amount.toLocaleString('en-ZA', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function renderDuplicates(content) {
+  const totalItems = state.parsedInvoices.reduce((s, inv) => s + inv.items.length, 0);
+  const totalDupItems = state.duplicates.reduce((s, g) => s + g.length, 0);
+  const dupValue = state.duplicates.reduce((s, g) => s + g.reduce((s2,i) => s2 + i.price, 0), 0);
+
+  let html = `<div class="stats-strip">
+    <div class="stat-card"><div class="stat-label">Invoices</div><div class="stat-value accent">${state.parsedInvoices.length}</div></div>
+    <div class="stat-card"><div class="stat-label">Total Line Items</div><div class="stat-value">${totalItems}</div></div>
+    <div class="stat-card"><div class="stat-label">Duplicate Groups</div><div class="stat-value ${state.duplicates.length > 0 ? 'danger' : 'ok'}">${state.duplicates.length}</div></div>
+    <div class="stat-card"><div class="stat-label">Duplicate Items</div><div class="stat-value ${totalDupItems > 0 ? 'danger' : 'ok'}">${totalDupItems}</div></div>
+  </div>`;
+
+  if (state.duplicates.length === 0) {
+    html += `<div class="empty-state"><div class="empty-icon">✅</div><h2>No Duplicates Found</h2><p>All line items appear to be unique across the loaded invoices.</p></div>`;
+  } else {
+    html += `<div style="margin-bottom:16px;font-size:12px;color:var(--muted)">Found <strong style="color:var(--danger)">${state.duplicates.length} duplicate groups</strong> across ${state.parsedInvoices.length} invoices. Items appearing in multiple invoices are flagged below.</div>`;
+    
+    state.duplicates.forEach((group, gi) => {
+      const desc = group[0].description;
+      const sources = [...new Set(group.map(i => i.source.replace(/\d{8}-/,'').replace(/\.pdf|\.xlsx/i,'')))];
+      html += `<div class="dup-group">
+        <div class="dup-group-header">
+          <div class="pill">DUP ${gi+1}</div>
+          <div class="dup-group-title">${desc.substring(0,80)}</div>
+          <div class="dup-group-amount">${group.length} occurrences</div>
+        </div>
+        <div class="dup-rows">
+          <div class="dup-row" style="color:var(--muted);font-size:10px;padding:8px 20px;border-bottom:1px solid var(--border)">
+            <span>SOURCE INVOICE</span><span>DESCRIPTION</span><span style="text-align:right">QTY</span><span style="text-align:right">AMOUNT</span>
+          </div>`;
+      group.forEach(item => {
+        const srcShort = item.source.replace(/^\d{8}-\w+-/, '').replace(/\.[^.]+$/, '');
+        html += `<div class="dup-row">
+          <div class="dup-source" title="${item.source}">${srcShort}</div>
+          <div class="dup-desc">${item.description} ${item.code ? `<span style="font-size:10px;color:var(--muted)">[${item.code}]</span>` : ''}</div>
+          <div class="dup-qty">${item.qty}</div>
+          <div class="dup-price">${formatAmount(item.price, 'ZAR')}</div>
+        </div>`;
+      });
+      html += `</div></div>`;
+    });
+  }
+
+  content.innerHTML = html;
+}
+
+function renderAllItems(content) {
+  let html = '';
+  state.parsedInvoices.forEach(inv => {
+    const dupCount = inv.items.filter(i => i.isDup).length;
+    html += `<div class="invoice-section">
+      <div class="invoice-header">
+        <span class="file-badge ${inv.filename.endsWith('.pdf') ? 'badge-pdf' : 'badge-xlsx'}">${inv.filename.split('.').pop().toUpperCase()}</span>
+        <span class="invoice-title">${inv.filename.replace(/^\d{8}-\w+-/,'')}</span>
+        ${dupCount > 0 ? `<span style="font-size:11px;color:var(--danger)">⚠ ${dupCount} duplicates</span>` : ''}
+        <span class="invoice-total">${formatAmount(inv.total, inv.currency || 'ZAR')}</span>
+      </div>
+      <table class="invoice-table">
+        <thead><tr>
+          <th>Part Code</th>
+          <th>Description</th>
+          <th style="text-align:right">Qty</th>
+          <th style="text-align:right">Amount</th>
+        </tr></thead>
+        <tbody>`;
+    
+    if (inv.items.length === 0) {
+      html += `<tr><td colspan="4" style="color:var(--muted);text-align:center;padding:20px">No line items extracted from this invoice</td></tr>`;
+    } else {
+      inv.items.forEach(item => {
+        html += `<tr class="${item.isDup ? 'dup-highlight' : ''}">
+          <td class="code-cell">${item.code || '—'}</td>
+          <td>${item.description.substring(0,80)}${item.isDup ? '<span class="dup-flag">DUP</span>' : ''}</td>
+          <td style="text-align:right;color:var(--muted)">${item.qty}</td>
+          <td style="text-align:right;color:var(--warn)">${formatAmount(item.price, inv.currency || 'ZAR')}</td>
+        </tr>`;
+      });
+    }
+    html += `</tbody></table></div>`;
+  });
+  content.innerHTML = html;
+}
+
+function renderSummary(content) {
+  let html = `<div class="compare-grid">`;
+  state.parsedInvoices.forEach(inv => {
+    const srcShort = inv.filename.replace(/^\d{8}-\w+-/,'').replace(/\.[^.]+$/,'');
+    html += `<div class="compare-card">
+      <div class="compare-card-name">${srcShort}</div>
+      <div class="compare-card-total">${formatAmount(inv.total, inv.currency || 'ZAR')}</div>
+      <div class="compare-card-rows">
+        Line items: <span>${inv.items.length}</span> &nbsp;|&nbsp; Duplicates: <span style="color:${inv.dupItems > 0 ? 'var(--danger)' : 'var(--accent2)'}">${inv.dupItems}</span>
+      </div>
+    </div>`;
+  });
+  html += `</div>`;
+
+  // Grand total
+  const grandTotal = state.parsedInvoices.reduce((s, inv) => s + inv.total, 0);
+  html += `<div class="stat-card" style="max-width:400px;margin-bottom:24px">
+    <div class="stat-label">Combined Invoice Total (all currencies mixed — verify)</div>
+    <div class="stat-value accent" style="font-size:22px">${grandTotal.toLocaleString('en-ZA', {minimumFractionDigits:2})} (mixed)</div>
+  </div>`;
+
+  // Invoice details table
+  html += `<table class="invoice-table">
+    <thead><tr>
+      <th>Invoice / File</th>
+      <th>Date</th>
+      <th>Supplier</th>
+      <th style="text-align:right">Items</th>
+      <th style="text-align:right">Total</th>
+      <th style="text-align:right">Dups</th>
+    </tr></thead><tbody>`;
+
+  const supplierMap = {
+    'rs': 'RS Autosport', 'porscheza': 'RS Autosport', 'labour': 'RS Autosport',
+    'ebs': 'EBS Racing (USA)', 'parts-wise': 'Parts-Wise (NL)',
+    'proforma': 'Design 911 (UK)'
+  };
+
+  state.parsedInvoices.forEach(inv => {
+    const parts = inv.filename.replace(/\.pdf|\.xlsx/i,'').split('-');
+    const date = parts[0] ? parts[0].replace(/(\d{4})(\d{2})(\d{2})/,'$1-$2-$3') : '—';
+    let supplier = 'Unknown';
+    for (const [key, val] of Object.entries(supplierMap)) {
+      if (inv.filename.toLowerCase().includes(key)) { supplier = val; break; }
+    }
+    html += `<tr>
+      <td>${inv.filename.replace(/^\d{8}-/,'').replace(/\.[^.]+$/,'')}</td>
+      <td class="code-cell">${date}</td>
+      <td>${supplier}</td>
+      <td style="text-align:right;color:var(--muted)">${inv.items.length}</td>
+      <td style="text-align:right;color:var(--accent)">${formatAmount(inv.total, inv.currency || 'ZAR')}</td>
+      <td style="text-align:right;color:${inv.dupItems > 0 ? 'var(--danger)' : 'var(--accent2)'}">${inv.dupItems}</td>
+    </tr>`;
+  });
+  html += `</tbody></table>`;
+  content.innerHTML = html;
+}
+
+// ─── PRE-LOAD DEMO INSTRUCTIONS ───
+document.getElementById('headerProject').textContent = document.getElementById('projectName').value;
+</script>
+</body>
+</html>
